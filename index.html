@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>神廟逃亡：舉手體感互動遊戲</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Google Fonts: Cinzel & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- TensorFlow.js, Teachable Machine Image & Pose -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/pose@latest/dist/teachablemachine-pose.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background: radial-gradient(circle at 50% 20%, #1e1b2e 0%, #0d0f17 100%);
+    }
+    .font-cinzel {
+      font-family: 'Cinzel', serif;
+    }
+    /* 自訂神廟青銅金邊風格 */
+    .temple-border {
+      border: 2px solid #b4833e;
+      box-shadow: 0 0 20px rgba(180, 131, 62, 0.25), inset 0 0 15px rgba(0, 0, 0, 0.8);
+    }
+    .gold-glow {
+      text-shadow: 0 0 12px rgba(251, 191, 36, 0.6);
+    }
+    /* 鏡頭翻轉以符合直覺鏡像操作 */
+    .mirror-mode video, .mirror-mode canvas {
+      transform: scaleX(-1);
+    }
+    /* 隱藏滾動條 */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #374151;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+
+<body class="min-h-screen text-slate-100 flex flex-col items-center p-3 md:p-6 overflow-x-hidden">
+
+  <!-- 頁面頂端標題區塊 -->
+  <header class="w-full max-w-6xl mb-4 flex flex-col md:flex-row items-center justify-between gap-3 border-b border-amber-900/40 pb-3">
+    <div class="flex items-center gap-3">
+      <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-amber-800 flex items-center justify-center text-2xl shadow-lg border border-amber-400">
+        🗿
+      </div>
+      <div>
+        <h1 class="text-2xl md:text-3xl font-black tracking-wider text-amber-400 font-cinzel gold-glow">
+          TEMPLE RUN · 舉手逃亡
+        </h1>
+        <p class="text-xs md:text-sm text-slate-400">
+          作業 SWP08 姿態互動體驗 · 舉起左手向左閃、舉起右手向右閃避滾石
+        </p>
+      </div>
+    </div>
+
+    <!-- 頂端控制小工具 -->
+    <div class="flex items-center gap-2">
+      <button id="toggleSoundBtn" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold border border-slate-700 flex items-center gap-1 transition">
+        <span id="soundIcon">🔊</span> <span id="soundText">音效開啟</span>
+      </button>
+      <button id="helpModalBtn" class="px-3 py-1.5 rounded-lg bg-amber-950/80 hover:bg-amber-900 text-amber-300 text-xs font-semibold border border-amber-700/60 transition">
+        📖 操作與評分說明
+      </button>
+    </div>
+  </header>
+
+  <!-- 主互動區域 (雙欄響應式排版) -->
+  <main class="w-full max-w-6xl grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+    
+    <!-- 左側 7 欄：3D 神廟逃亡遊戲主視窗 -->
+    <section class="lg:col-span-7 flex flex-col items-center">
+      <div class="relative w-full temple-border rounded-2xl overflow-hidden bg-slate-950 aspect-[4/5] sm:aspect-[4/4.5] max-h-[580px] flex items-center justify-center">
+        
+        <!-- 遊戲 Canvas -->
+        <canvas id="gameCanvas" width="500" height="580" class="w-full h-full object-cover block"></canvas>
+
+        <!-- 遊戲頂端 HUD 狀態列 -->
+        <div class="absolute top-3 inset-x-3 flex justify-between items-center pointer-events-none z-10">
+          <div class="bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-amber-500/30 flex items-center gap-2">
+            <span class="text-amber-400 text-sm font-cinzel">🏃 DISTANCE</span>
+            <span id="scoreText" class="font-mono font-bold text-lg text-white">0 m</span>
+          </div>
+
+          <div class="bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-yellow-500/30 flex items-center gap-2">
+            <span class="text-yellow-400 text-sm">🪙 COINS</span>
+            <span id="coinsText" class="font-mono font-bold text-lg text-yellow-300">0</span>
+          </div>
+        </div>
+
+        <!-- 動作觸發即時回饋浮水印標籤 -->
+        <div id="gestureActionBadge" class="absolute bottom-5 inset-x-0 mx-auto w-fit px-4 py-1.5 rounded-full bg-slate-900/80 backdrop-blur-md border border-amber-500/50 text-amber-300 text-xs font-bold tracking-wide flex items-center gap-2 shadow-xl transition-all">
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+          <span>當前位置：中路奔馳</span>
+        </div>
+
+        <!-- 遊戲結束/開始 覆蓋層 Modal -->
+        <div id="gameOverlay" class="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center z-20">
+          <div class="w-16 h-16 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-4xl mb-3 shadow-inner">
+            🏃‍♂️
+          </div>
+          <h2 id="overlayTitle" class="text-2xl md:text-3xl font-black font-cinzel text-amber-400 mb-1 gold-glow">
+            神廟逃亡準備就緒
+          </h2>
+          <p id="overlaySubtitle" class="text-sm text-slate-300 max-w-sm mb-5">
+            啟動右側攝影機，透過舉手向左、向右閃避迎面而來的上古滾石！
+          </p>
+          <div id="finalScoreBoard" class="hidden mb-4 bg-slate-900/90 border border-slate-700 px-6 py-3 rounded-xl">
+            <div class="text-xs text-slate-400 mb-0.5">本次逃亡成績</div>
+            <div id="finalScoreVal" class="text-2xl font-bold font-mono text-amber-300">0 公尺</div>
+          </div>
+          <button id="startPlayBtn" class="px-7 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-700 hover:from-amber-400 hover:to-amber-600 font-bold text-slate-950 shadow-lg hover:shadow-amber-500/30 transform hover:-translate-y-0.5 transition active:translate-y-0">
+            開始逃亡 (SPACE)
+          </button>
+        </div>
+      </div>
+
+      <!-- 螢幕手動輔助按鈕 (防備用或無鏡頭時測試) -->
+      <div class="w-full mt-3 flex items-center justify-between bg-slate-900/70 border border-slate-800 rounded-xl p-2 px-3 text-xs text-slate-400">
+        <span>手動輔助切換：</span>
+        <div class="flex gap-2">
+          <button id="btnManualLeft" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 active:bg-amber-600 text-white rounded-lg border border-slate-700">
+            ⬅ 左道 (A)
+          </button>
+          <button id="btnManualCenter" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 active:bg-amber-600 text-white rounded-lg border border-slate-700">
+            ⬆ 中道 (W)
+          </button>
+          <button id="btnManualRight" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 active:bg-amber-600 text-white rounded-lg border border-slate-700">
+            ➡ 右道 (D)
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右側 5 欄：Teachable Machine 控制台與信心度指標 -->
+    <section class="lg:col-span-5 flex flex-col gap-4">
+      
+      <!-- 鏡頭與 AI 模型面板 -->
+      <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <div class="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+          <div class="flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+            <h3 class="font-bold text-sm text-slate-200">Teachable Machine 辨識中心</h3>
+          </div>
+          <span id="modelStatusTag" class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+            等待開啟
+          </span>
+        </div>
+
+        <!-- 攝影機視訊預覽框 -->
+        <div class="relative w-full aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center mirror-mode mb-3">
+          <div id="webcamPlaceholder" class="text-center p-4 text-slate-500 flex flex-col items-center gap-2">
+            <svg class="w-10 h-10 text-slate-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+            </svg>
+            <p class="text-xs">點擊下方按鈕啟動攝影機辨識</p>
+          </div>
+          <!-- 實際掛載 Teachable Machine 視訊畫布 -->
+          <div id="webcamContainer" class="w-full h-full flex items-center justify-center"></div>
+        </div>
+
+        <!-- 模型控制按鈕群 -->
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <button id="toggleCameraBtn" class="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition">
+            <span>📷</span> <span>啟動攝影機辨識</span>
+          </button>
+          <button id="changeModelBtn" class="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 flex items-center justify-center gap-1 transition">
+            <span>⚙️</span> <span>更換模型網址</span>
+          </button>
+        </div>
+
+        <!-- 當前識別狀態即時提示 -->
+        <div class="bg-slate-950/80 border border-amber-500/30 rounded-xl p-2.5 mb-3 flex items-center justify-between">
+          <div class="text-[11px] text-slate-300">
+            <span class="text-slate-500">即時觸發：</span>
+            <span id="currentActionDebug" class="text-amber-400 font-bold font-mono">尚未啟動</span>
+          </div>
+          <button id="btnInvertControl" class="text-[10px] px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 transition">
+            🔄 左右方向對調
+          </button>
+        </div>
+
+        <!-- 規則提示標籤 -->
+        <div class="mb-3 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 flex items-center gap-2">
+          <span>🎯</span>
+          <span><b>自動對應已生效：</b>類別 1 = 左手 (左道) ｜ 類別 2 = 右手 (右道) ｜ 類別 3 = 一般中路</span>
+        </div>
+
+        <!-- 自訂類別對應動作設定區 (避免因模型命名不符導致角色不動) -->
+        <div id="classMappingSection" class="hidden mb-3 bg-slate-950 border border-slate-800 rounded-xl p-3">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-amber-400">🎯 模型動作跑道對應設定</span>
+            <button id="autoMapBtn" class="text-[10px] text-emerald-400 hover:underline">智慧自動分配</button>
+          </div>
+          <p class="text-[10px] text-slate-400 mb-2">系統已依「1 是左手、2 是右手」自動分配，亦可手動微調：</p>
+          <div id="classMappingList" class="flex flex-col gap-1.5 text-xs">
+            <!-- 動態生成各類別的下拉對應清單 -->
+          </div>
+        </div>
+
+        <!-- 即時類別預測進度長條圖 (作業需求：顯示辨識結果與信心分數) -->
+        <div>
+          <div class="flex justify-between items-center text-xs font-semibold text-slate-300 mb-2">
+            <span>辨識類別 (Class)</span>
+            <span>信心分數 (Confidence)</span>
+          </div>
+          <div id="predictionList" class="flex flex-col gap-2">
+            <!-- 預設占位條 -->
+            <div class="p-2 rounded-lg bg-slate-950/60 border border-slate-800 text-xs text-slate-500 text-center">
+              攝影機啟動後即時呈現分數條
+            </div>
+          </div>
+        </div>
+
+        <!-- 觸發門檻拉桿 -->
+        <div class="mt-4 pt-3 border-t border-slate-800">
+          <div class="flex justify-between text-xs text-slate-400 mb-1">
+            <span>判定門檻靈敏度:</span>
+            <span id="thresholdVal" class="text-amber-400 font-mono font-bold">50%</span>
+          </div>
+          <input id="thresholdSlider" type="range" min="30" max="95" value="50" class="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg">
+        </div>
+
+      </div>
+
+    </section>
+  </main>
+
+  <!-- 說明彈窗 Modal -->
+  <div id="helpModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+    <div class="bg-slate-900 border border-amber-600/40 rounded-2xl max-w-md w-full p-6 shadow-2xl relative">
+      <button id="closeHelpBtn" class="absolute top-4 right-4 text-slate-400 hover:text-white text-lg">✕</button>
+      <h3 class="text-lg font-bold text-amber-400 font-cinzel mb-3 flex items-center gap-2">
+        <span>📖</span> 遊戲玩法與模型配置說明
+      </h3>
+      <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+        <p><b>1. 遊戲目標：</b>扮演神廟探險家，在石板跑道上持續向前奔馳，收集金幣並躲避迎面滾來的巨石障礙。</p>
+        <p><b>2. 體感控制方式：</b>
+          <br>• <b>舉起左手：</b>角色自動閃入左側跑道。
+          <br>• <b>舉起右手：</b>角色自動閃入右側跑道。
+          <br>• <b>雙手放下/中立：</b>角色維持中間跑道。
+        </p>
+        <p><b>3. 快速部署到 GitHub Pages：</b>
+          <br>將這份程式碼儲存為 <code class="text-amber-300">index.html</code>，上傳至 GitHub Repository 根目錄，進入 Settings -> Pages 開啟部署即可交件！
+        </p>
+      </div>
+      <div class="mt-5 text-right">
+        <button id="helpOkBtn" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs">
+          我知道了，開始遊玩
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自訂提示浮動 Toast (取代禁止使用的 alert) -->
+  <div id="toast" class="fixed top-6 right-6 bg-slate-900 border border-amber-500/60 text-amber-300 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-2xl transition-all duration-300 opacity-0 pointer-events-none transform translate-y-[-10px] z-50 flex items-center gap-2">
+    <span id="toastIcon">✨</span>
+    <span id="toastMsg">通知訊息</span>
+  </div>
+
+  <script>
+    // --- 全域常數與狀態 ---
+    let MODEL_URL = "https://teachablemachine.withgoogle.com/models/8QeYvD1ve/";
+    let model = null;
+    let webcam = null;
+    let maxPredictions = 0;
+    let isWebcamActive = false;
+    let confidenceThreshold = 0.50;
+    let soundEnabled = true;
+    let isPoseModel = false;
+    let isInverted = false;
+
+    // 類別動作映射表：className -> targetLane (0: 左, 1: 中, 2: 右)
+    let classToLaneMap = {};
+
+    // Toast 提示框函式（避免 alert）
+    function showToast(msg, icon = "💡") {
+      const toast = document.getElementById("toast");
+      document.getElementById("toastMsg").innerText = msg;
+      document.getElementById("toastIcon").innerText = icon;
+      toast.classList.remove("opacity-0", "translate-y-[-10px]", "pointer-events-none");
+      toast.classList.add("opacity-100", "translate-y-0");
+      setTimeout(() => {
+        toast.classList.add("opacity-0", "translate-y-[-10px]", "pointer-events-none");
+        toast.classList.remove("opacity-100", "translate-y-0");
+      }, 3000);
+    }
+
+    // --- Web Audio API 合成音效引擎 (不依賴外部音檔) ---
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new AudioContextClass();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function playSoundEffect(type) {
+      if (!soundEnabled) return;
+      initAudio();
+      if (!audioCtx) return;
+
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      if (type === 'dodge') {
+        // 風聲 / 換道呼嘯聲
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(260, now);
+        osc.frequency.exponentialRampToValueAtTime(540, now + 0.12);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.12);
+        osc.start(now);
+        osc.stop(now + 0.12);
+      } else if (type === 'coin') {
+        // 金幣拾取清脆高音
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(987.77, now); // B5
+        osc.frequency.setValueAtTime(1318.51, now + 0.08); // E6
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.22);
+        osc.start(now);
+        osc.stop(now + 0.22);
+      } else if (type === 'crash') {
+        // 撞石碎裂重低音
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(120, now);
+        osc.frequency.exponentialRampToValueAtTime(30, now + 0.35);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.35);
+      } else if (type === 'start') {
+        // 冒險出發樂音
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(330, now);
+        osc.frequency.exponentialRampToValueAtTime(660, now + 0.2);
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.linearRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now);
+        osc.stop(now + 0.2);
+      }
+    }
+
+    // --- Teachable Machine 模組載入與推論循環 ---
+    async function startCameraAndModel() {
+      const btn = document.getElementById("toggleCameraBtn");
+      const statusTag = document.getElementById("modelStatusTag");
+      btn.disabled = true;
+      btn.innerHTML = `<span class="animate-spin inline-block">⏳</span> <span>載入模型中...</span>`;
+
+      try {
+        const fixedUrl = MODEL_URL.endsWith("/") ? MODEL_URL : MODEL_URL + "/";
+        const modelJSON = fixedUrl + "model.json";
+        const metadataJSON = fixedUrl + "metadata.json";
+
+        // 自動偵測模型類型 (Image 或 Pose)
+        let modelType = "image";
+        try {
+          const metaResp = await fetch(metadataJSON);
+          const metaData = await metaResp.json();
+          if (metaData.packageName && metaData.packageName.includes("pose")) {
+            modelType = "pose";
+          }
+        } catch (e) {
+          console.log("使用預設 Image 模型解析");
+        }
+
+        if (modelType === "pose" && typeof tmPose !== "undefined") {
+          isPoseModel = true;
+          model = await tmPose.load(modelJSON, metadataJSON);
+          maxPredictions = model.getTotalClasses();
+          webcam = new tmPose.Webcam(240, 240, true);
+        } else {
+          isPoseModel = false;
+          model = await tmImage.load(modelJSON, metadataJSON);
+          maxPredictions = model.getTotalClasses();
+          webcam = new tmImage.Webcam(240, 240, true);
+        }
+
+        await webcam.setup();
+        await webcam.play();
+        isWebcamActive = true;
+
+        // 掛載到 DOM
+        const container = document.getElementById("webcamContainer");
+        const placeholder = document.getElementById("webcamPlaceholder");
+        placeholder.style.display = "none";
+        container.innerHTML = "";
+        container.appendChild(webcam.canvas);
+
+        // 讀取類別標籤並初始化映射設定
+        buildClassMappingUI();
+        buildPredictionUI();
+
+        btn.classList.replace("bg-emerald-600", "bg-rose-600");
+        btn.classList.replace("hover:bg-emerald-500", "hover:bg-rose-500");
+        btn.innerHTML = `<span>🛑</span> <span>關閉攝影機</span>`;
+        btn.disabled = false;
+
+        statusTag.innerText = "辨識中";
+        statusTag.className = "text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+
+        showToast("模型與攝影機已啟動！若動作相反可按「左右方向對調」。", "🚀");
+        window.requestAnimationFrame(predictionLoop);
+      } catch (err) {
+        console.error("模型載入失敗：", err);
+        btn.disabled = false;
+        btn.innerHTML = `<span>📷</span> <span>重試攝影機</span>`;
+        statusTag.innerText = "載入失敗";
+        statusTag.className = "text-xs px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        showToast("模型網址載入失敗，可檢查網址或使用手動按鍵操作！", "⚠️");
+      }
+    }
+
+    function buildClassMappingUI() {
+      const labels = model.getClassLabels ? model.getClassLabels() : [];
+      classToLaneMap = {};
+      const mappingSection = document.getElementById("classMappingSection");
+      const mappingList = document.getElementById("classMappingList");
+      mappingList.innerHTML = "";
+
+      labels.forEach((name, idx) => {
+        const lower = name.toLowerCase().trim();
+        let defaultLane = 1;
+
+        // 規則：1 為左手 (左道 0)，2 為右手 (右道 2)，其他 (3/中立/放下) 為中道 1
+        if (lower.includes("1") || lower.includes("左") || lower.includes("left")) {
+          defaultLane = 0;
+        } else if (lower.includes("2") || lower.includes("右") || lower.includes("right")) {
+          defaultLane = 2;
+        } else if (lower.includes("3") || lower.includes("中") || lower.includes("center") || lower.includes("站") || lower.includes("放")) {
+          defaultLane = 1;
+        } else {
+          // 若名稱無數字關鍵字，依序號 index：第 1 類別左手，第 2 類別右手，第 3 類別及後續中道
+          if (idx === 0) defaultLane = 0;
+          else if (idx === 1) defaultLane = 2;
+          else defaultLane = 1;
+        }
+
+        classToLaneMap[name] = defaultLane;
+
+        // 建立下拉選單讓使用者隨時可調整
+        const row = document.createElement("div");
+        row.className = "flex items-center justify-between bg-slate-900 px-2 py-1.5 rounded border border-slate-800";
+        row.innerHTML = `
+          <span class="font-medium text-slate-200 truncate max-w-[130px]">${name}</span>
+          <select data-class="${name}" class="lane-selector bg-slate-800 text-amber-300 text-xs rounded px-2 py-0.5 border border-slate-700 outline-none">
+            <option value="0" ${defaultLane === 0 ? "selected" : ""}>⬅ 左道 (1: 左手)</option>
+            <option value="1" ${defaultLane === 1 ? "selected" : ""}>⬆ 中道 (3: 一般)</option>
+            <option value="2" ${defaultLane === 2 ? "selected" : ""}>➡ 右道 (2: 右手)</option>
+          </select>
+        `;
+        mappingList.appendChild(row);
+      });
+
+      // 監聽下拉選單變更
+      document.querySelectorAll(".lane-selector").forEach(sel => {
+        sel.addEventListener("change", (e) => {
+          const cls = e.target.getAttribute("data-class");
+          classToLaneMap[cls] = parseInt(e.target.value, 10);
+          showToast(`已設定【${cls}】對應至 ${getLaneName(classToLaneMap[cls])}`, "✅");
+        });
+      });
+
+      mappingSection.classList.remove("hidden");
+    }
+
+    function getLaneName(laneIndex) {
+      if (laneIndex === 0) return "左道 ⬅ (左手 1)";
+      if (laneIndex === 2) return "右道 ➡ (右手 2)";
+      return "中道 ⬆ (一般 3)";
+    }
+
+    function stopCamera() {
+      if (webcam) {
+        webcam.stop();
+      }
+      isWebcamActive = false;
+      const btn = document.getElementById("toggleCameraBtn");
+      btn.classList.replace("bg-rose-600", "bg-emerald-600");
+      btn.classList.replace("hover:bg-rose-500", "hover:bg-emerald-500");
+      btn.innerHTML = `<span>📷</span> <span>啟動攝影機辨識</span>`;
+
+      document.getElementById("webcamPlaceholder").style.display = "flex";
+      document.getElementById("webcamContainer").innerHTML = "";
+      document.getElementById("modelStatusTag").innerText = "已暫停";
+      document.getElementById("modelStatusTag").className = "text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30";
+      showToast("攝影機已停止", "🛑");
+    }
+
+    function buildPredictionUI() {
+      const list = document.getElementById("predictionList");
+      list.innerHTML = "";
+      for (let i = 0; i < maxPredictions; i++) {
+        const item = document.createElement("div");
+        item.className = "p-2 rounded-xl bg-slate-950 border border-slate-800 text-xs flex flex-col gap-1 transition-all";
+        item.id = `pred-card-${i}`;
+        item.innerHTML = `
+          <div class="flex justify-between items-center">
+            <span id="class-name-${i}" class="font-semibold text-slate-300">類別</span>
+            <span id="class-prob-${i}" class="font-mono text-amber-400 font-bold">0%</span>
+          </div>
+          <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+            <div id="class-bar-${i}" class="bg-gradient-to-r from-amber-500 to-emerald-400 h-full w-0 transition-all duration-75"></div>
+          </div>
+        `;
+        list.appendChild(item);
+      }
+    }
+
+    // 辨識循環推論
+    async function predictionLoop() {
+      if (!isWebcamActive) return;
+      webcam.update();
+      
+      let prediction;
+      if (isPoseModel) {
+        const { posenetOutput } = await model.estimatePose(webcam.canvas);
+        prediction = await model.predict(posenetOutput);
+      } else {
+        prediction = await model.predict(webcam.canvas);
+      }
+
+      let highestProb = 0;
+      let topClass = "";
+      let topIndex = -1;
+
+      for (let i = 0; i < maxPredictions; i++) {
+        const name = prediction[i].className;
+        const prob = prediction[i].probability;
+        const percent = (prob * 100).toFixed(0);
+
+        const nameEl = document.getElementById(`class-name-${i}`);
+        const probEl = document.getElementById(`class-prob-${i}`);
+        const barEl = document.getElementById(`class-bar-${i}`);
+        const cardEl = document.getElementById(`pred-card-${i}`);
+
+        if (nameEl) nameEl.innerText = name;
+        if (probEl) probEl.innerText = `${percent}%`;
+        if (barEl) barEl.style.width = `${percent}%`;
+
+        if (prob > highestProb) {
+          highestProb = prob;
+          topClass = name;
+          topIndex = i;
+        }
+
+        if (cardEl) {
+          cardEl.classList.remove("border-amber-400", "bg-amber-950/20");
+        }
+      }
+
+      // 突顯最高信心之卡片
+      if (topIndex !== -1) {
+        const bestCard = document.getElementById(`pred-card-${topIndex}`);
+        if (bestCard) bestCard.classList.add("border-amber-400", "bg-amber-950/20");
+      }
+
+      // 當超過設定門檻時進行跑道切換控制
+      if (highestProb >= confidenceThreshold && topClass) {
+        let assignedLane = classToLaneMap[topClass] !== undefined ? classToLaneMap[topClass] : 1;
+        
+        // 方向鏡像反轉支援
+        if (isInverted) {
+          if (assignedLane === 0) assignedLane = 2;
+          else if (assignedLane === 2) assignedLane = 0;
+        }
+
+        document.getElementById("currentActionDebug").innerText = `${topClass} (${(highestProb * 100).toFixed(0)}%) → ${getLaneName(assignedLane)}`;
+        applyLaneControl(assignedLane, topClass);
+      }
+
+      window.requestAnimationFrame(predictionLoop);
+    }
+
+    // --- 跑道切換控制邏輯 ---
+    function applyLaneControl(targetLane, className) {
+      if (targetLane === 0) {
+        updateBadge(`👈 判定【${className}】· 左手向左閃`, "text-emerald-300", "border-emerald-500/50");
+      } else if (targetLane === 2) {
+        updateBadge(`👉 判定【${className}】· 右手向右閃`, "text-amber-300", "border-amber-500/50");
+      } else {
+        updateBadge(`⚡ 判定【${className}】· 中路奔馳`, "text-slate-200", "border-slate-500/50");
+      }
+
+      // 變更玩家目標軌道
+      if (targetLane !== player.targetLane) {
+        player.targetLane = targetLane;
+        playSoundEffect('dodge');
+      }
+    }
+
+    function updateBadge(text, textColor, borderColor) {
+      const badge = document.getElementById("gestureActionBadge");
+      badge.innerHTML = `<span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span><span>${text}</span>`;
+      badge.className = `absolute bottom-5 inset-x-0 mx-auto w-fit px-4 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md border ${borderColor} ${textColor} text-xs font-bold tracking-wide flex items-center gap-2 shadow-xl transition-all`;
+    }
+
+    // --- 神廟逃亡跑酷遊戲 Canvas 核心 (偽 3D 透視) ---
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // 透視幾何參數
+    const HORIZON_Y = 140;       // 遠端地平線消失點 Y
+    const HORIZON_X = 250;       // 遠端地平線消失點 X (中心)
+    const TOP_WIDTH = 90;        // 遠處石道寬度
+    const BOTTOM_WIDTH = 420;    // 近端石道寬度
+
+    let gameState = "ready";     // "ready", "playing", "gameover"
+    let distanceTraveled = 0;
+    let coinsCollected = 0;
+    let baseSpeed = 5.5;
+    let currentSpeed = 5.5;
+    let roadStripe = 0;
+    let obstacles = [];
+    let coins = [];
+    let particles = [];
+
+    // 探險家角色模型
+    const player = {
+      lane: 1,           // 當前軌道位置 (小數浮點，平滑過渡：0, 1, 2)
+      targetLane: 1,     // 目標軌道 (0: 左, 1: 中, 2: 右)
+      y: 470,
+      runPhase: 0,
+      tilt: 0
+    };
+
+    function startNewGame() {
+      initAudio();
+      gameState = "playing";
+      distanceTraveled = 0;
+      coinsCollected = 0;
+      currentSpeed = baseSpeed;
+      obstacles = [];
+      coins = [];
+      particles = [];
+      player.lane = 1;
+      player.targetLane = 1;
+
+      document.getElementById("gameOverlay").classList.add("hidden");
+      document.getElementById("scoreText").innerText = "0 m";
+      document.getElementById("coinsText").innerText = "0";
+      playSoundEffect('start');
+    }
+
+    function gameOver() {
+      gameState = "gameover";
+      playSoundEffect('crash');
+      
+      const overlay = document.getElementById("gameOverlay");
+      overlay.classList.remove("hidden");
+      document.getElementById("overlayTitle").innerText = "逃亡失敗！撞擊巨石";
+      document.getElementById("overlaySubtitle").innerText = "上古守護神像將你吞沒，隨時可以重新發起挑戰！";
+      document.getElementById("finalScoreBoard").classList.remove("hidden");
+      document.getElementById("finalScoreVal").innerText = `${Math.floor(distanceTraveled)} 公尺 (🪙 ${coinsCollected} 枚)`;
+      document.getElementById("startPlayBtn").innerText = "再次挑戰 (SPACE)";
+    }
+
+    // 物理與物體生成更新
+    let spawnCounter = 0;
+    function updatePhysics() {
+      // 玩家平滑橫移（無論是否在遊戲進行中皆更新，讓玩家在鏡頭前即時預覽手勢效果）
+      const laneDiff = player.targetLane - player.lane;
+      player.lane += laneDiff * 0.22;
+      player.tilt = laneDiff * 0.35; // 轉彎傾斜感
+      player.runPhase += 0.28;
+
+      if (gameState !== "playing") return;
+
+      distanceTraveled += 0.25;
+      currentSpeed = baseSpeed + Math.min(distanceTraveled * 0.004, 7.5);
+      
+      document.getElementById("scoreText").innerText = `${Math.floor(distanceTraveled)} m`;
+      document.getElementById("coinsText").innerText = `${coinsCollected}`;
+
+      roadStripe = (roadStripe + currentSpeed * 1.8) % 60;
+
+      // 生成隨機障礙滾石或金幣
+      spawnCounter++;
+      if (spawnCounter > Math.max(38, 70 - currentSpeed * 2.5)) {
+        const randomLane = Math.floor(Math.random() * 3);
+        const type = Math.random() < 0.3 ? "coinRow" : "boulder";
+
+        if (type === "boulder") {
+          obstacles.push({
+            lane: randomLane,
+            z: 0.04,
+            rotation: 0
+          });
+        } else {
+          // 生成連續金幣
+          for (let c = 0; c < 3; c++) {
+            coins.push({
+              lane: randomLane,
+              z: 0.04 - (c * 0.06),
+              collected: false
+            });
+          }
+        }
+        spawnCounter = 0;
+      }
+
+      // 更新巨石
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.z += 0.013 * (currentSpeed / 5);
+        obs.rotation += 0.08;
+
+        // 碰撞檢測 (近端 z 在 0.82 ~ 0.98 之間)
+        if (obs.z >= 0.82 && obs.z <= 0.98) {
+          if (Math.abs(player.lane - obs.lane) < 0.45) {
+            // 撞擊產生碎石粒子
+            createExplosionParticles(getScreenCoords(obs.lane, obs.z).x, 460);
+            gameOver();
+            return;
+          }
+        }
+
+        if (obs.z > 1.15) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      // 更新金幣
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const coin = coins[i];
+        coin.z += 0.013 * (currentSpeed / 5);
+
+        // 收集檢測
+        if (!coin.collected && coin.z >= 0.82 && coin.z <= 0.98) {
+          if (Math.abs(player.lane - coin.lane) < 0.5) {
+            coin.collected = true;
+            coinsCollected++;
+            playSoundEffect('coin');
+            createCoinSparkles(getScreenCoords(coin.lane, coin.z).x, 460);
+          }
+        }
+
+        if (coin.z > 1.15 || coin.collected) {
+          coins.splice(i, 1);
+        }
+      }
+
+      // 更新粒子特效
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.2; // 重力
+        p.life -= 0.03;
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+        }
+      }
+    }
+
+    function createCoinSparkles(x, y) {
+      for (let i = 0; i < 8; i++) {
+        particles.push({
+          x: x,
+          y: y - 20,
+          vx: (Math.random() - 0.5) * 6,
+          vy: -Math.random() * 5 - 2,
+          color: '#fbbf24',
+          size: Math.random() * 4 + 2,
+          life: 1.0
+        });
+      }
+    }
+
+    function createExplosionParticles(x, y) {
+      for (let i = 0; i < 20; i++) {
+        particles.push({
+          x: x,
+          y: y,
+          vx: (Math.random() - 0.5) * 12,
+          vy: (Math.random() - 0.8) * 10,
+          color: Math.random() < 0.5 ? '#b45309' : '#ea580c',
+          size: Math.random() * 6 + 3,
+          life: 1.0
+        });
+      }
+    }
+
+    // 計算透視座標工具
+    function getScreenCoords(laneIndex, z) {
+      const topStart = HORIZON_X - TOP_WIDTH / 2;
+      const bottomStart = (canvas.width - BOTTOM_WIDTH) / 2;
+
+      const topLaneX = topStart + (TOP_WIDTH / 3) * (laneIndex + 0.5);
+      const bottomLaneX = bottomStart + (BOTTOM_WIDTH / 3) * (laneIndex + 0.5);
+
+      const x = topLaneX + (bottomLaneX - topLaneX) * z;
+      const y = HORIZON_Y + (canvas.height - HORIZON_Y) * z;
+      return { x, y };
+    }
+
+    // --- 繪製跑道與場景氛圍 ---
+    function drawTempleScene() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // 1. 遠景：神廟深淵暗幕與金字塔剪影
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, HORIZON_Y);
+      skyGrad.addColorStop(0, "#080910");
+      skyGrad.addColorStop(0.7, "#1a121e");
+      skyGrad.addColorStop(1, "#361b17");
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, canvas.width, HORIZON_Y);
+
+      // 遠方神秘太陽光暈
+      const sunGlow = ctx.createRadialGradient(HORIZON_X, HORIZON_Y - 10, 4, HORIZON_X, HORIZON_Y - 10, 110);
+      sunGlow.addColorStop(0, "rgba(251, 191, 36, 0.7)");
+      sunGlow.addColorStop(0.5, "rgba(234, 88, 12, 0.3)");
+      sunGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = sunGlow;
+      ctx.fillRect(0, 0, canvas.width, HORIZON_Y);
+
+      // 2. 懸崖深淵兩側黑幕
+      ctx.fillStyle = "#0c0d14";
+      ctx.fillRect(0, HORIZON_Y, canvas.width, canvas.height - HORIZON_Y);
+
+      // 3. 懸空古老青苔石板跑道 (透視梯形)
+      const topStart = HORIZON_X - TOP_WIDTH / 2;
+      const bottomStart = (canvas.width - BOTTOM_WIDTH) / 2;
+
+      const roadGrad = ctx.createLinearGradient(0, HORIZON_Y, 0, canvas.height);
+      roadGrad.addColorStop(0, "#3e2723");
+      roadGrad.addColorStop(0.5, "#5d4037");
+      roadGrad.addColorStop(1, "#795548");
+
+      ctx.save();
+      ctx.fillStyle = roadGrad;
+      ctx.beginPath();
+      ctx.moveTo(topStart, HORIZON_Y);
+      ctx.lineTo(topStart + TOP_WIDTH, HORIZON_Y);
+      ctx.lineTo(bottomStart + BOTTOM_WIDTH, canvas.height);
+      ctx.lineTo(bottomStart, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      // 石道金屬側邊厚度光影
+      ctx.strokeStyle = "#b4833e";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // 4. 跑道金屬分隔格線與古石雕紋
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.25)";
+      ctx.lineWidth = 1.5;
+      for (let i = 1; i < 3; i++) {
+        const topX = topStart + (TOP_WIDTH / 3) * i;
+        const bottomX = bottomStart + (BOTTOM_WIDTH / 3) * i;
+        ctx.beginPath();
+        ctx.moveTo(topX, HORIZON_Y);
+        ctx.lineTo(bottomX, canvas.height);
+        ctx.stroke();
+      }
+
+      // 動態滾動石板接縫 (營造極速前進感)
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.lineWidth = 2;
+      for (let d = 0; d < 8; d++) {
+        const zProg = ((d * 60 + roadStripe) % 480) / 480;
+        const yLine = HORIZON_Y + (canvas.height - HORIZON_Y) * zProg;
+        const wLine = TOP_WIDTH + (BOTTOM_WIDTH - TOP_WIDTH) * zProg;
+        const leftX = HORIZON_X - wLine / 2;
+
+        ctx.beginPath();
+        ctx.moveTo(leftX, yLine);
+        ctx.lineTo(leftX + wLine, yLine);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 5. 兩側神廟浮空火焰石柱
+      for (let side of [-1, 1]) {
+        for (let p = 0.2; p < 1.0; p += 0.25) {
+          const zP = (p + (distanceTraveled * 0.008) % 0.25);
+          if (zP > 1.0) continue;
+          const roadW = TOP_WIDTH + (BOTTOM_WIDTH - TOP_WIDTH) * zP;
+          const pillarX = HORIZON_X + side * (roadW / 2 + 18 + zP * 30);
+          const pillarY = HORIZON_Y + (canvas.height - HORIZON_Y) * zP;
+          const pillarSize = 10 + zP * 25;
+
+          // 石柱體
+          ctx.fillStyle = "#271c19";
+          ctx.fillRect(pillarX - pillarSize / 3, pillarY - pillarSize, pillarSize * 0.6, pillarSize);
+
+          // 火把火焰
+          ctx.fillStyle = "#ff6f00";
+          ctx.beginPath();
+          ctx.arc(pillarX, pillarY - pillarSize - 4, pillarSize * 0.25 + Math.sin(Date.now() * 0.02) * 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 6. 繪製金幣
+      coins.forEach(coin => {
+        if (coin.z <= 0) return;
+        const pos = getScreenCoords(coin.lane, coin.z);
+        const radius = Math.max(3, 4 + coin.z * 18);
+
+        ctx.save();
+        ctx.translate(pos.x, pos.y - radius);
+        // 金幣自轉效果
+        const spinScale = Math.sin(Date.now() * 0.008 + coin.z * 10);
+        ctx.scale(Math.abs(spinScale) * 0.7 + 0.3, 1);
+
+        // 金幣發光
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#d97706";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.restore();
+      });
+
+      // 7. 繪製滾動巨石障礙
+      obstacles.forEach(obs => {
+        if (obs.z <= 0) return;
+        const pos = getScreenCoords(obs.lane, obs.z);
+        const radius = Math.max(6, 8 + obs.z * 42);
+
+        ctx.save();
+        ctx.translate(pos.x, pos.y - radius);
+
+        // 巨石本體陰影與漸層
+        const rockGrad = ctx.createRadialGradient(-radius * 0.3, -radius * 0.3, radius * 0.1, 0, 0, radius);
+        rockGrad.addColorStop(0, "#5d4037");
+        rockGrad.addColorStop(0.7, "#2e1c16");
+        rockGrad.addColorStop(1, "#180d09");
+        ctx.fillStyle = rockGrad;
+
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 巨石裂紋與刻紋
+        ctx.rotate(obs.rotation);
+        ctx.strokeStyle = "#ff7043";
+        ctx.lineWidth = Math.max(1, obs.z * 3);
+        ctx.beginPath();
+        ctx.moveTo(-radius * 0.6, -radius * 0.2);
+        ctx.lineTo(-radius * 0.1, radius * 0.2);
+        ctx.lineTo(radius * 0.5, -radius * 0.3);
+        ctx.stroke();
+
+        ctx.restore();
+      });
+
+      // 8. 繪製探險家跑酷角色 (背影)
+      const playerPos = getScreenCoords(player.lane, 0.9);
+      const px = playerPos.x;
+      const py = player.y;
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(player.tilt); // 換道轉彎傾角
+
+      // 陰影
+      ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.beginPath();
+      ctx.ellipse(0, 5, 20, 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 探險家雙腿擺動
+      const legRun = Math.sin(player.runPhase) * 12;
+      ctx.strokeStyle = "#4e342e";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      // 左腿
+      ctx.moveTo(-6, -10);
+      ctx.lineTo(-7, 4 + legRun);
+      // 右腿
+      ctx.moveTo(6, -10);
+      ctx.lineTo(7, 4 - legRun);
+      ctx.stroke();
+
+      // 身體軀幹 (卡其色探險風衣)
+      ctx.fillStyle = "#d4a373";
+      ctx.fillRect(-12, -32, 24, 24);
+
+      // 上古探險皮背包
+      ctx.fillStyle = "#8d5b4c";
+      ctx.fillRect(-9, -29, 18, 16);
+      ctx.strokeStyle = "#5c3d2e";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(-9, -29, 18, 16);
+
+      // 探險圓盤帽與頭部
+      ctx.fillStyle = "#faedcd";
+      ctx.beginPath();
+      ctx.arc(0, -42, 9, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 寬沿探險帽
+      ctx.fillStyle = "#a98467";
+      ctx.beginPath();
+      ctx.ellipse(0, -47, 18, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#6c584c";
+      ctx.beginPath();
+      ctx.arc(0, -50, 7, Math.PI, 0, false);
+      ctx.fill();
+
+      ctx.restore();
+
+      // 9. 繪製火花粒子
+      particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1.0;
+    }
+
+    // 主遊戲循環
+    function gameLoop() {
+      updatePhysics();
+      drawTempleScene();
+      requestAnimationFrame(gameLoop);
+    }
+    requestAnimationFrame(gameLoop);
+
+    // --- 使用者介面互動與鍵盤事件綁定 ---
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        if (gameState !== "playing") {
+          startNewGame();
+        }
+      } else if (e.code === "ArrowLeft" || e.key === "a" || e.key === "A") {
+        if (player.targetLane > 0) {
+          player.targetLane--;
+          playSoundEffect('dodge');
+          updateBadge("👈 鍵盤控制 · 向左閃避", "text-emerald-300", "border-emerald-500/50");
+        }
+      } else if (e.code === "ArrowRight" || e.key === "d" || e.key === "D") {
+        if (player.targetLane < 2) {
+          player.targetLane++;
+          playSoundEffect('dodge');
+          updateBadge("👉 鍵盤控制 · 向右閃避", "text-amber-300", "border-amber-500/50");
+        }
+      } else if (e.code === "ArrowUp" || e.key === "w" || e.key === "W") {
+        player.targetLane = 1;
+        playSoundEffect('dodge');
+        updateBadge("⚡ 鍵盤控制 · 回歸中道", "text-slate-200", "border-slate-500/50");
+      }
+    });
+
+    // 開始按鈕
+    document.getElementById("startPlayBtn").addEventListener("click", () => {
+      startNewGame();
+    });
+
+    // 攝影機啟動/關閉切換
+    document.getElementById("toggleCameraBtn").addEventListener("click", () => {
+      if (!isWebcamActive) {
+        startCameraAndModel();
+      } else {
+        stopCamera();
+      }
+    });
+
+    // 靈敏度拉桿
+    const slider = document.getElementById("thresholdSlider");
+    const sliderVal = document.getElementById("thresholdVal");
+    slider.addEventListener("input", (e) => {
+      confidenceThreshold = e.target.value / 100;
+      sliderVal.innerText = `${e.target.value}%`;
+    });
+
+    // 左右反轉切換按鈕
+    document.getElementById("btnInvertControl").addEventListener("click", () => {
+      isInverted = !isInverted;
+      const btn = document.getElementById("btnInvertControl");
+      btn.innerText = isInverted ? "🔄 左右方向：已反轉" : "🔄 左右方向對調";
+      btn.classList.toggle("bg-amber-600", isInverted);
+      btn.classList.toggle("text-white", isInverted);
+      showToast(isInverted ? "已開啟左右方向對調！" : "已還原標準左右方向", "🔄");
+    });
+
+    // 智慧自動重分配按鈕
+    document.getElementById("autoMapBtn").addEventListener("click", () => {
+      buildClassMappingUI();
+      showToast("已重新智慧配對類別！", "✨");
+    });
+
+    // 手動軌道輔助按鈕
+    document.getElementById("btnManualLeft").addEventListener("click", () => {
+      player.targetLane = 0;
+      playSoundEffect('dodge');
+      updateBadge("👈 點擊按鈕 · 左側跑道", "text-emerald-300", "border-emerald-500/50");
+    });
+    document.getElementById("btnManualCenter").addEventListener("click", () => {
+      player.targetLane = 1;
+      playSoundEffect('dodge');
+      updateBadge("⚡ 點擊按鈕 · 中間跑道", "text-slate-200", "border-slate-500/50");
+    });
+    document.getElementById("btnManualRight").addEventListener("click", () => {
+      player.targetLane = 2;
+      playSoundEffect('dodge');
+      updateBadge("👉 點擊按鈕 · 右側跑道", "text-amber-300", "border-amber-500/50");
+    });
+
+    // 音效開關切換
+    document.getElementById("toggleSoundBtn").addEventListener("click", () => {
+      soundEnabled = !soundEnabled;
+      document.getElementById("soundIcon").innerText = soundEnabled ? "🔊" : "🔇";
+      document.getElementById("soundText").innerText = soundEnabled ? "音效開啟" : "靜音狀態";
+      showToast(soundEnabled ? "音效已開啟" : "已切換為靜音", soundEnabled ? "🔔" : "🔕");
+    });
+
+    // 說明彈窗
+    const helpModal = document.getElementById("helpModal");
+    document.getElementById("helpModalBtn").addEventListener("click", () => {
+      helpModal.classList.remove("hidden");
+      helpModal.classList.add("flex");
+    });
+    document.getElementById("closeHelpBtn").addEventListener("click", () => {
+      helpModal.classList.add("hidden");
+      helpModal.classList.remove("flex");
+    });
+    document.getElementById("helpOkBtn").addEventListener("click", () => {
+      helpModal.classList.add("hidden");
+      helpModal.classList.remove("flex");
+    });
+
+    // 自訂更換模型網址 (便於臨時換用其他同學或新訓練模型)
+    document.getElementById("changeModelBtn").addEventListener("click", () => {
+      const newUrl = prompt("請輸入 Teachable Machine 模型網址：", MODEL_URL);
+      if (newUrl && newUrl.trim() !== "") {
+        MODEL_URL = newUrl.trim();
+        showToast("已更新模型網址！請點擊綠色按鈕重新啟動辨識。", "⚙️");
+        if (isWebcamActive) {
+          stopCamera();
+        }
+      }
+    });
+  </script>
+</body>
+</html>
